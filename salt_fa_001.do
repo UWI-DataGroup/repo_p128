@@ -30,11 +30,13 @@
 ** FILE 1 - DATA PREPARATION
 ** ------------------------------------------------------------
 use "`datapath'/version01/2-working/salt_foodgroups.dta" ,clear
-tab foodcat ,m
+tab foodcat , m
 
 ** Keep selected variables
-keep pid id subject ed region sex agey educ occg whotn_ad grams calories energykj  foodgroup foodcat cat_fact foodname_original 
-order pid id subject ed region sex agey educ occg whotn_ad grams calories energykj  foodgroup foodcat cat_fact foodname_original 
+** NB: Primary outcome = grams
+** And we use calories to define influential outliers
+keep pid id subject ed region sex agey educ occg whotn_ad grams calories foodcat cat_fact foodname_original 
+order pid grams calories foodcat cat_fact foodname_original id subject ed region sex agey educ occg whotn_ad  
 label var pid "Unique participant identifier"
 label var id "ID from original NutriBase file"
 label var ed "Survey enumeration district"
@@ -46,31 +48,45 @@ label var occg "Major occupational groups (9 groups)"
 label var whotn_ad "Survey weight"
 label var grams "Grams of food item recalled"
 label var calories "Calories of food item recalled"
-label var energykj "Energy of food item recalled"
 label var subject "Day of 24-hour recall"
-label var foodgroup "56 Food Groups"
-label var foodcat "33 Food Categories"
-label var cat_fact "31 Food categories"
+label var foodcat "33 Food Categories - not used in PCA"
+label var cat_fact "30 Food categories + 1 missing category"
 label var foodname_original "Original name of food from NutriBase"
-
 
 ** Preparation
 ** We want a WIDE dataset with grams/day for EACH of the THIRTY (?) food categories
+** NOTE that the largest element of the missing category numbers = WATER
 drop if cat_fact==.
-** Mean grams for each 24-hour recall day, by participant and food category 
-collapse(sum) grams , by(subject pid cat_fact)
-**  Mean grams across both 24-hour recall days, by participant and food category
-collapse(mean) grams , by(pid cat_fact) 
 
-** Descriptive
-forval x = 1(1)30 { 
-    ameans grams if cat_fact==`x'
-}
+** Looking at calorie distributions for unlikely daily totals
+preserve
+    collapse(sum) calories , by(subject pid)
+    sort pid subject 
+    bysort pid : gen day = _n
+    sort day calories
+    ** generate percentiles
+    xtile perc1 = calories, nq(40)
+    tabstat calories, by(perc1)  stats(mean) format(%9.0f)
+restore
+
+** TOTAL grams for each 24-hour recall day, by participant and food category 
+collapse(sum) grams , by(subject pid cat_fact sex agey educ occg whotn_ad)
+**  AVERAGE grams across both 24-hour recall days, by participant and food category
+collapse(mean) grams , by(pid cat_fact sex agey educ occg whotn_ad) 
 
 
+** KEEP some basic participant demographics
+** We can re-join this with FACTORS at a later date for regression work
+preserve
+    keep pid sex agey educ occg whotn_ad
+    egen touse = tag(pid) 
+    keep if touse==1 
+    drop occg touse 
+    save "`datapath'/version01/2-working/pca_demographics.dta" , replace
+restore    
 
-
-** Reshape to WIDE, ready for Factor Analytics
+** Reshape to WIDE --> ONE variable per food group
+** Preparing for entry into Factor Analysis 
 rename cat_fact fcat 
 label var fcat "30 Food categories"
 tab fcat 
@@ -113,18 +129,35 @@ foreach var in grams1 grams2 grams3 grams4 grams5 grams6 grams7 grams8 grams9 gr
     replace `var'=0 if `var'==.
 } 
 
-** Proportion of empty categories
-forval x = 1(1)30 {
-    gen empty`x' = 0
-    replace empty`x'=1 if grams`x'==0
-    tab empty`x'
-}
+** Now we save only what we need to keep the dataset simple
+** We create TWO datasets
 
-** Initial Factor Analysis
-drop if grams29>6000 
-factor grams1-grams30,factors(6) blanks(0.25)
-rotate,  blanks(0.25) normalize
-** estat factors
-** loadingplot 
-** scoreplot, mlabel(pid) aspect(1)
+** ----------------------------------------------------
+** DATASET 1: pca_30
+** Based on groupings created by in-house nutritional expertise
+** ----------------------------------------------------
+preserve
+    keep pid grams*
+    save "`datapath'/version01/2-working/pca_30.dta" , replace
+restore
 
+
+** Sparse data --> Consider reducing the number of food categories
+** We could reduce (for example) to FAO categories
+** But looking at the 
+
+** ----------------------------------------------------
+** DATASET 2: pca_10
+** based on FAO MDD-W, constructed to measure dietary diversity
+** REF: XX
+** ----------------------------------------------------
+** GROUP 1 – GRAINS, WHITE ROOTS AND TUBERS, AND PLANTAINS
+** GROUP 2 – PULSES (BEANS, PEAS AND LENTILS)
+** GROUP 3 – NUTS AND SEEDS
+** GROUP 4 – DAIRY
+** GROUP 5 – MEAT, POULTRY AND FISH
+** GROUP 6 – EGGS
+** GROUP 7 – DARK GREEN LEAFY VEGETABLES
+** GROUP 8 – OTHER VITAMIN A-RICH FRUITS AND VEGETABLES
+** GROUP 9 – OTHER VEGETABLES
+** GROUP 10 – OTHER FRUITS
